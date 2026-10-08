@@ -35,6 +35,28 @@
 #define __BB_EP__
 #pragma GCC optimize("O2")
 
+// Experiment for the unwritten strip at the right edge of the TRMNL X (issue 42).
+// With BB_PANEL_FLAG_MIRROR_X the right edge of the panel is the FIRST 16-bit
+// word of every row transfer, and that word never reaches the glass. When
+// FASTEPD_X_LEAD_WORD is defined, every row transfer starts with one extra
+// (sacrificial) bus word of zeros in front of the pixel data, so that a first
+// word swallowed by the ESP32-S3 LCD peripheral is this one and not the first
+// 8 pixels. The row buffer keeps its 4-byte aligned transmit address; the pixel
+// data starts BBEP_LEAD_BYTES after it. Untested on hardware; off by default.
+#if defined(FASTEPD_X_LEAD_WORD) && !defined(__LINUX__) && !defined(CONFIG_IDF_TARGET_ESP32C5)
+#define BBEP_LEAD_BYTES 2
+#else
+#define BBEP_LEAD_BYTES 0
+#endif
+// Second, independent experiment for the same strip: when FASTEPD_X_SPH_FROM_DC
+// is defined, the source driver start pulse (SPH) is driven by the LCD
+// peripheral's D/C signal instead of its chip select. The chip select is active
+// for the whole transaction, including the one blank clock cycle esp_lcd puts
+// before the data phase; D/C can be set to its active level for the data phase
+// only, so a clock edge before the first data word is not seen by the panel.
+// The dummy D/C GPIO of the panel definition is then left unused. Can be
+// combined with FASTEPD_X_LEAD_WORD. Untested on hardware; off by default.
+
 const uint8_t ucMirror[256] PROGMEM =
 {0, 128, 64, 192, 32, 160, 96, 224, 16, 144, 80, 208, 48, 176, 112, 240,
     8, 136, 72, 200, 40, 168, 104, 232, 24, 152, 88, 216, 56, 184, 120, 248,
@@ -1650,6 +1672,14 @@ static void IRAM_ATTR bbepWriteRow(FASTEPDSTATE *pState, uint8_t *pData, int iLe
     parlio_transmit_config_t tx_cfg;
     memset(&tx_cfg, 0, sizeof(tx_cfg));
     err = parlio_tx_unit_transmit(parlio_tx_handle, pData, (iLen + pState->panelDef.iLinePadding) * 8, &tx_cfg);
+#elif BBEP_LEAD_BYTES
+    // One sacrificial bus word in front of the pixel data (see BBEP_LEAD_BYTES).
+    // pData - BBEP_LEAD_BYTES is the 4-byte aligned start of this row's buffer;
+    // the length is rounded up to a multiple of 4 as esp_lcd requires, the
+    // extra bytes only lengthen the trailing padding.
+    pData -= BBEP_LEAD_BYTES;
+    *(uint16_t *)pData = 0; // zeros = no-op pushes, should the word reach the panel after all
+    err = esp_lcd_panel_io_tx_color(io_handle, -1, pData, (iLen + BBEP_LEAD_BYTES + pState->panelDef.iLinePadding + 3) & ~3);
 #else
     err = esp_lcd_panel_io_tx_color(io_handle, -1, pData, iLen + pState->panelDef.iLinePadding);
 #endif // S3/C5
@@ -1763,7 +1793,18 @@ int bbepIOInit(FASTEPDSTATE *pState)
 #else
     // Initialize the ESP32 LCD API to drive parallel data at high speed
     // The code forces the use of a D/C pin, so we must assign it to an unused GPIO on each device
+#ifdef FASTEPD_X_SPH_FROM_DC
+    // SPH from the D/C signal: inactive (high) when idle and in the command and
+    // dummy phases, active (low) during the data phase only. See the note at
+    // the top of this file.
+    s3_bus_config.dc_gpio_num = (gpio_num_t)pState->panelDef.ioSPH;
+    s3_io_config.dc_levels.dc_idle_level = 1;
+    s3_io_config.dc_levels.dc_cmd_level = 1;
+    s3_io_config.dc_levels.dc_dummy_level = 1;
+    s3_io_config.dc_levels.dc_data_level = 0;
+#else
     s3_bus_config.dc_gpio_num = (gpio_num_t)pState->panelDef.ioDCDummy;
+#endif
     s3_bus_config.wr_gpio_num = (gpio_num_t)pState->panelDef.ioCL;
     s3_bus_config.bus_width = pState->panelDef.bus_width;
     for (int i=0; i<pState->panelDef.bus_width; i++) {
@@ -1775,7 +1816,11 @@ int bbepIOInit(FASTEPDSTATE *pState)
         bSlowSPH = 1;
         s3_io_config.cs_gpio_num = (gpio_num_t)-1; // disable hardware CS
     } else {
+#ifdef FASTEPD_X_SPH_FROM_DC
+        s3_io_config.cs_gpio_num = (gpio_num_t)-1; // SPH comes from the D/C signal, no hardware CS
+#else
         s3_io_config.cs_gpio_num = (gpio_num_t)pState->panelDef.ioSPH;
+#endif
     }
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &s3_io_config, &io_handle));
 #endif // S3/C5
@@ -1876,7 +1921,12 @@ int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int
 
     // Allocate memory for each line to transmit
 #ifndef __LINUX__
-    pState->dma_buf = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width / 2) + pState->panelDef.iLinePadding + 16, MALLOC_CAP_DMA);
+    pState->dma_buf = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width / 2) + pState->panelDef.iLinePadding + 16 + 2 * BBEP_LEAD_BYTES, MALLOC_CAP_DMA);
+#if BBEP_LEAD_BYTES
+    // Both alternating row buffers (offset 0 and width/4) keep a 4-byte aligned
+    // transmit address; the pixel data of each starts one bus word later.
+    if (pState->dma_buf) pState->dma_buf += BBEP_LEAD_BYTES;
+#endif
 #else
     pState->dma_buf = (uint8_t *)malloc((pState->width/2) + pState->panelDef.iLinePadding + 16);
 #endif
