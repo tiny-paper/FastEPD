@@ -2667,6 +2667,11 @@ int bbepFixRect(FASTEPDSTATE *pState, BB_RECT *pRect, int *iStartCol, int *iEndC
                 *iEndRow = pState->height - 1 - i;
                 break;
         }
+        if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) { // rows are sent last pixel first; the column mask is applied in that order
+            i = *iStartCol;
+            *iStartCol = pState->native_width - 1 - *iEndCol;
+            *iEndCol = pState->native_width - 1 - i;
+        }
     return 0;
 } /* bbepFixRect() */
 
