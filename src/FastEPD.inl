@@ -3176,7 +3176,7 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                     if (iStartCol > 0 || iEndCol < pState->native_width-1) { // There is a region rectangle defined, clip the output to it
                         uint32_t *src, *dst;
                         src = (uint32_t *)u8Cache;
-                        dst = (uint32_t *)pState->dma_buf;
+                        dst = (uint32_t *)d;
                         for (n=0; n<pState->native_width/16; n++) { // mask off non-changing pixels to 0s
                             dst[n] &= src[n];
                         }
