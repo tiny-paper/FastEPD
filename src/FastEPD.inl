@@ -1880,6 +1880,8 @@ int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int
 #else
     pState->dma_buf = (uint8_t *)malloc((pState->width/2) + pState->panelDef.iLinePadding + 16);
 #endif
+    if (!pState->dma_buf) return BBEP_ERROR_NO_MEMORY;
+    memset(pState->dma_buf, 0, (pState->width / 2) + pState->panelDef.iLinePadding + 16); // the padding sent after each row must be no-drive
     iPasses = (pState->panelDef.iMatrixSize / 16); // number of passes
     pGrayLower = (uint8_t *)malloc(256 * iPasses);
     if (!pGrayLower) return BBEP_ERROR_NO_MEMORY;
