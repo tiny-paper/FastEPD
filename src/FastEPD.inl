@@ -2985,12 +2985,12 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
         // or push black if you know you're starting from white
         // N.B. to maintain a balance of charge, be careful with the 'push all' mode
         uint8_t *s, *d;
-        uint8_t *u8Gray2BW, *u8Gray2Gray;
+        static uint8_t u8Gray2BW[256], u8Gray2Gray[256]; // u8Cache holds the column mask of the rectangle
         int dy; // destination Y for flipped displays
         // Create fast lookup tables to convert the pixels directly into pushes
-        u8Gray2BW = u8Cache;
-        u8Gray2Gray = &u8Cache[256];
-        memcpy(pState->pPrevious, pState->pCurrent, (pState->native_width/4) * pState->native_height); // previous = current
+        for (i = iStartRow; i <= iEndRow; i++) { // previous = current for the rows that are updated
+            memcpy(&pState->pPrevious[i * (pState->native_width/4)], &pState->pCurrent[i * (pState->native_width/4)], pState->native_width/4);
+        }
         for (i=0; i<256; i++) {
             // black/white table
             uint8_t ucB, ucW, uc = i, ucBW = 0, ucGray = 0;
@@ -3038,7 +3038,9 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
             for (i = 0; i < pState->native_height; i++) {
                 dy = (pState->iFlags & BB_PANEL_FLAG_MIRROR_Y) ? pState->native_height - 1 - i : i;
                 d = &pState->dma_buf[iDMAOff];
-                if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) {
+                if (dy < iStartRow || dy > iEndRow) { // outside the clip rectangle
+                    memset(d, 0, pState->native_width/4);
+                } else if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) {
                     s = &pState->pCurrent[(dy * (pState->native_width/4)) + pState->native_width/4 - 1];
                     // push white and black pixels simultaneously
                     for (n = 0; n < (pState->native_width / 4); n++) {
@@ -3050,6 +3052,14 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                     for (n = 0; n < (pState->native_width / 4); n++) {
                         *d++ = u8Gray2BW[*s++]; // Turn each byte directly into black or white pushes
                     } // for n
+                }
+                if (dy >= iStartRow && dy <= iEndRow && (iStartCol > 0 || iEndCol < pState->native_width-1)) { // There is a region rectangle defined, clip the output to it
+                    uint32_t *src, *dst;
+                    src = (uint32_t *)u8Cache;
+                    dst = (uint32_t *)&pState->dma_buf[iDMAOff];
+                    for (n=0; n<pState->native_width/16; n++) { // mask off non-changing pixels to 0s
+                        dst[n] &= src[n];
+                    }
                 }
                 // Send the data for the row
                 bbepWriteRow(pState, &pState->dma_buf[iDMAOff], (pState->native_width / 4), (i!=0));
@@ -3063,7 +3073,9 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
             for (i = 0; i < pState->native_height; i++) {
                 dy = (pState->iFlags & BB_PANEL_FLAG_MIRROR_Y) ? pState->native_height - 1 - i : i;
                 d = &pState->dma_buf[iDMAOff];
-                if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) {
+                if (dy < iStartRow || dy > iEndRow) { // outside the clip rectangle
+                    memset(d, 0, pState->native_width/4);
+                } else if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) {
                     s = &pState->pCurrent[(dy * (pState->native_width/4)) + pState->native_width/4 - 1];
                     // push white and black pixels simultaneously
                     for (n = 0; n < (pState->native_width / 4); n++) {
@@ -3075,6 +3087,14 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                     for (n = 0; n < (pState->native_width / 4); n++) {
                         *d++ = u8Gray2Gray[*s++]; // Turn each byte directly into light or dark pushes
                     } // for n
+                }
+                if (dy >= iStartRow && dy <= iEndRow && (iStartCol > 0 || iEndCol < pState->native_width-1)) { // There is a region rectangle defined, clip the output to it
+                    uint32_t *src, *dst;
+                    src = (uint32_t *)u8Cache;
+                    dst = (uint32_t *)&pState->dma_buf[iDMAOff];
+                    for (n=0; n<pState->native_width/16; n++) { // mask off non-changing pixels to 0s
+                        dst[n] &= src[n];
+                    }
                 }
                 // Send the data for the row
                 bbepWriteRow(pState, &pState->dma_buf[iDMAOff], (pState->native_width / 4), (i!=0));
