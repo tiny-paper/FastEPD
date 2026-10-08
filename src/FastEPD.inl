@@ -810,7 +810,7 @@ int EPDiyV7EinkPower(void *pBBEP, int bOn)
 FASTEPDSTATE *pState = (FASTEPDSTATE *)pBBEP;
 uint8_t ucTemp[4];
 uint8_t u8Value = 0; // I/O bits for the PCA9535
-int vcom;
+int vcom, iTimeout;
 
     if (bOn == pState->pwr_on) return BBEP_SUCCESS;
     if (bOn) {
@@ -821,7 +821,21 @@ int vcom;
         bbepPCA9535DigitalWrite(11, 1); // PWRUP on
         bbepPCA9535DigitalWrite(12, 1); // VCOM CTRL on
         vTaskDelay(3); // allow time to power up
-        while (!(bbepPCA9535DigitalRead(14))) { } // CFG_PIN_PWRGOOD
+        iTimeout = 0;
+        while (iTimeout < 400 && !(bbepPCA9535DigitalRead(14))) { // CFG_PIN_PWRGOOD
+            iTimeout++;
+            vTaskDelay(1);
+        }
+        if (iTimeout >= 400) { // the power good signal never arrived, leave the rails off
+            bbepPCA9535DigitalWrite(11, 0); // PWRUP off
+            bbepPCA9535DigitalWrite(12, 0); // VCOM CTRL off
+            bbepPCA9535DigitalWrite(8, 0); // OE off
+            bbepPCA9535DigitalWrite(9, 0); // GMOD off
+            gpio_set_level((gpio_num_t)pState->panelDef.ioSPV,0);
+            vTaskDelay(1);
+            bbepPCA9535DigitalWrite(13, 0); // WAKEUP off - start power-down seq
+            return BBEP_IO_ERROR;
+        }
 
         //ucTemp[0] = TPS_REG_UPSEQ0;
         //ucTemp[1] = 0xe1;
@@ -846,7 +860,7 @@ int vcom;
         ucTemp[2] = (uint8_t)(vcom >> 8);
         bbepI2CWrite(0x68, ucTemp, 3);
 
-        int iTimeout = 0;
+        iTimeout = 0;
         u8Value = 0;
         while (iTimeout < 400 && ((u8Value & 0xfa) != 0xfa)) {
             bbepI2CReadRegister(0x68, TPS_REG_PG, &u8Value, 1); // read power good
