@@ -2690,6 +2690,8 @@ int bbepFixRect(FASTEPDSTATE *pState, BB_RECT *pRect, int *iStartCol, int *iEndC
 static void IRAM_ATTR bbepClear(FASTEPDSTATE *pState, uint8_t val, uint8_t count, BB_RECT *pRect)
 {
 int i, k, dy, iStartCol, iEndCol, iStartRow, iEndRow; // clipping area
+int iDMAOff;
+uint8_t *d;
 
     if (pState->iPanelType == BB_PANEL_VIRTUAL || pState->iPanelType == BB_PANEL_IT8951) return; // not available
 
@@ -2719,16 +2721,19 @@ int i, k, dy, iStartCol, iEndCol, iStartRow, iEndRow; // clipping area
     }
     for (k = 0; k < count; k++) {
         bbepRowControl(pState, ROW_START);
+        iDMAOff = 0;
         for (i = 0; i < pState->native_height; i++)
         {
             dy = (pState->iFlags & BB_PANEL_FLAG_MIRROR_Y) ? pState->native_height - 1 - i : i;
+            d = &pState->dma_buf[iDMAOff];
             // Send the data
             if (dy < iStartRow || dy > iEndRow) { // skip this row
-                memset(pState->dma_buf, 0, pState->native_width / 4);
+                memset(d, 0, pState->native_width / 4);
             } else { // mask the area we want to change
-                memcpy(pState->dma_buf, u8Cache, pState->native_width / 4);
+                memcpy(d, u8Cache, pState->native_width / 4);
             }
-            bbepWriteRow(pState, pState->dma_buf, pState->native_width / 4, (i!=0));
+            bbepWriteRow(pState, d, pState->native_width / 4, (i!=0));
+            iDMAOff ^= (pState->native_width/4);
         }
         delayMicroseconds(230);
     }
@@ -2740,7 +2745,7 @@ int i, k, dy, iStartCol, iEndCol, iStartRow, iEndRow; // clipping area
 //
 int bbepSmoothUpdate(FASTEPDSTATE *pState, bool bKeepOn, uint8_t u8Color)
 {
-    int i, n, pass;
+    int i, n, pass, iDMAOff;
     
     if (pState->iPanelType == BB_PANEL_VIRTUAL || pState->iPanelType == BB_PANEL_IT8951) return BBEP_ERROR_BAD_PARAMETER;
 
@@ -2780,12 +2785,15 @@ int bbepSmoothUpdate(FASTEPDSTATE *pState, bool bKeepOn, uint8_t u8Color)
         // Write N passes of the black data to the whole display
         for (pass = 0; pass < pState->iFullPasses; pass++) {
             bbepRowControl(pState, ROW_START);
+            iDMAOff = 0;
             for (i = 0; i < pState->native_height; i++) {
+                d = &pState->dma_buf[iDMAOff];
                 s = &pState->pTemp[i * (pState->native_width / 4)];
                 // Send the data for the row
-                memcpy(pState->dma_buf, s, pState->native_width/4);
-                bbepWriteRow(pState, pState->dma_buf, (pState->native_width / 4), 0);
+                memcpy(d, s, pState->native_width/4);
+                bbepWriteRow(pState, d, (pState->native_width / 4), 0);
                 bbepRowControl(pState, ROW_STEP);
+                iDMAOff ^= (pState->native_width/4);
             }
             delayMicroseconds(230);
         } // for pass
@@ -2793,13 +2801,15 @@ int bbepSmoothUpdate(FASTEPDSTATE *pState, bool bKeepOn, uint8_t u8Color)
         int dy, iPasses = (pState->panelDef.iMatrixSize / 16); // number of passes
         uint8_t u8Invert = (u8Color = BBEP_WHITE) ? 0x00 : 0xff;
         for (pass = 0; pass < iPasses; pass++) { // number of passes to make 16 unique gray levels
-            uint8_t *s, *d = pState->dma_buf;
+            uint8_t *s, *d;
             uint8_t *pGrayU, *pGrayL;
             pGrayU = pGrayUpper + (pass * 256);
             pGrayL = pGrayLower + (pass * 256);
             bbepRowControl(pState, ROW_START);
+            iDMAOff = 0;
             for (i = 0; i < pState->native_height; i++) {
                 dy = (pState->iFlags & BB_PANEL_FLAG_MIRROR_Y) ? pState->native_height - 1 - i : i;
+                d = &pState->dma_buf[iDMAOff];
                 s = &pState->pCurrent[dy * (pState->native_width / 2)];
                 if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) {
                     s += (pState->native_width / 2) - 8;
@@ -2820,8 +2830,9 @@ int bbepSmoothUpdate(FASTEPDSTATE *pState, bool bKeepOn, uint8_t u8Color)
                     } // for n
                     //  vTaskDelay(0);
                 }
-                bbepWriteRow(pState, pState->dma_buf, (pState->native_width / 4), 0);
+                bbepWriteRow(pState, d, (pState->native_width / 4), 0);
                 bbepRowControl(pState, ROW_STEP);
+                iDMAOff ^= (pState->native_width/4);
             } // for i
             delayMicroseconds(230);
         } // for pass
