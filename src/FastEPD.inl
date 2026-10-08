@@ -35,6 +35,20 @@
 #define __BB_EP__
 #pragma GCC optimize("O2")
 
+// Experiment for the unwritten strip at the right edge of the TRMNL X (issue 42).
+// With BB_PANEL_FLAG_MIRROR_X the right edge of the panel is the FIRST 16-bit
+// word of every row transfer, and that word never reaches the glass. When
+// FASTEPD_X_LEAD_WORD is defined, every row transfer starts with one extra
+// (sacrificial) bus word of zeros in front of the pixel data, so that a first
+// word swallowed by the ESP32-S3 LCD peripheral is this one and not the first
+// 8 pixels. The row buffer keeps its 4-byte aligned transmit address; the pixel
+// data starts BBEP_LEAD_BYTES after it. Untested on hardware; off by default.
+#if defined(FASTEPD_X_LEAD_WORD) && !defined(__LINUX__) && !defined(CONFIG_IDF_TARGET_ESP32C5)
+#define BBEP_LEAD_BYTES 2
+#else
+#define BBEP_LEAD_BYTES 0
+#endif
+
 const uint8_t ucMirror[256] PROGMEM =
 {0, 128, 64, 192, 32, 160, 96, 224, 16, 144, 80, 208, 48, 176, 112, 240,
     8, 136, 72, 200, 40, 168, 104, 232, 24, 152, 88, 216, 56, 184, 120, 248,
@@ -1664,6 +1678,14 @@ static void IRAM_ATTR bbepWriteRow(FASTEPDSTATE *pState, uint8_t *pData, int iLe
     parlio_transmit_config_t tx_cfg;
     memset(&tx_cfg, 0, sizeof(tx_cfg));
     err = parlio_tx_unit_transmit(parlio_tx_handle, pData, (iLen + pState->panelDef.iLinePadding) * 8, &tx_cfg);
+#elif BBEP_LEAD_BYTES
+    // One sacrificial bus word in front of the pixel data (see BBEP_LEAD_BYTES).
+    // pData - BBEP_LEAD_BYTES is the 4-byte aligned start of this row's buffer;
+    // the length is rounded up to a multiple of 4 as esp_lcd requires, the
+    // extra bytes only lengthen the trailing padding.
+    pData -= BBEP_LEAD_BYTES;
+    *(uint16_t *)pData = 0; // zeros = no-op pushes, should the word reach the panel after all
+    err = esp_lcd_panel_io_tx_color(io_handle, -1, pData, (iLen + BBEP_LEAD_BYTES + pState->panelDef.iLinePadding + 3) & ~3);
 #else
     err = esp_lcd_panel_io_tx_color(io_handle, -1, pData, iLen + pState->panelDef.iLinePadding);
 #endif // S3/C5
@@ -1890,7 +1912,12 @@ int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int
 
     // Allocate memory for each line to transmit
 #ifndef __LINUX__
-    pState->dma_buf = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width / 2) + pState->panelDef.iLinePadding + 16, MALLOC_CAP_DMA);
+    pState->dma_buf = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width / 2) + pState->panelDef.iLinePadding + 16 + 2 * BBEP_LEAD_BYTES, MALLOC_CAP_DMA);
+#if BBEP_LEAD_BYTES
+    // Both alternating row buffers (offset 0 and width/4) keep a 4-byte aligned
+    // transmit address; the pixel data of each starts one bus word later.
+    if (pState->dma_buf) pState->dma_buf += BBEP_LEAD_BYTES;
+#endif
 #else
     pState->dma_buf = (uint8_t *)malloc((pState->width/2) + pState->panelDef.iLinePadding + 16);
 #endif
