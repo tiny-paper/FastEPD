@@ -48,6 +48,14 @@
 #else
 #define BBEP_LEAD_BYTES 0
 #endif
+// Second, independent experiment for the same strip: when FASTEPD_X_SPH_FROM_DC
+// is defined, the source driver start pulse (SPH) is driven by the LCD
+// peripheral's D/C signal instead of its chip select. The chip select is active
+// for the whole transaction, including the one blank clock cycle esp_lcd puts
+// before the data phase; D/C can be set to its active level for the data phase
+// only, so a clock edge before the first data word is not seen by the panel.
+// The dummy D/C GPIO of the panel definition is then left unused. Can be
+// combined with FASTEPD_X_LEAD_WORD. Untested on hardware; off by default.
 
 const uint8_t ucMirror[256] PROGMEM =
 {0, 128, 64, 192, 32, 160, 96, 224, 16, 144, 80, 208, 48, 176, 112, 240,
@@ -1799,7 +1807,18 @@ int bbepIOInit(FASTEPDSTATE *pState)
 #else
     // Initialize the ESP32 LCD API to drive parallel data at high speed
     // The code forces the use of a D/C pin, so we must assign it to an unused GPIO on each device
+#ifdef FASTEPD_X_SPH_FROM_DC
+    // SPH from the D/C signal: inactive (high) when idle and in the command and
+    // dummy phases, active (low) during the data phase only. See the note at
+    // the top of this file.
+    s3_bus_config.dc_gpio_num = (gpio_num_t)pState->panelDef.ioSPH;
+    s3_io_config.dc_levels.dc_idle_level = 1;
+    s3_io_config.dc_levels.dc_cmd_level = 1;
+    s3_io_config.dc_levels.dc_dummy_level = 1;
+    s3_io_config.dc_levels.dc_data_level = 0;
+#else
     s3_bus_config.dc_gpio_num = (gpio_num_t)pState->panelDef.ioDCDummy;
+#endif
     s3_bus_config.wr_gpio_num = (gpio_num_t)pState->panelDef.ioCL;
     s3_bus_config.bus_width = pState->panelDef.bus_width;
     for (int i=0; i<pState->panelDef.bus_width; i++) {
@@ -1811,7 +1830,11 @@ int bbepIOInit(FASTEPDSTATE *pState)
         bSlowSPH = 1;
         s3_io_config.cs_gpio_num = (gpio_num_t)-1; // disable hardware CS
     } else {
+#ifdef FASTEPD_X_SPH_FROM_DC
+        s3_io_config.cs_gpio_num = (gpio_num_t)-1; // SPH comes from the D/C signal, no hardware CS
+#else
         s3_io_config.cs_gpio_num = (gpio_num_t)pState->panelDef.ioSPH;
+#endif
     }
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &s3_io_config, &io_handle));
 #endif // S3/C5
