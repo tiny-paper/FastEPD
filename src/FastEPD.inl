@@ -45,8 +45,16 @@
 // data starts BBEP_LEAD_BYTES after it. Untested on hardware; off by default.
 #if defined(FASTEPD_X_LEAD_WORD) && !defined(__LINUX__) && !defined(CONFIG_IDF_TARGET_ESP32C5)
 #define BBEP_LEAD_BYTES 2
+// The two alternating row buffers must not share the lead word: the second
+// buffer's lead word would be the last two pixel bytes of the first, which is
+// refilled while the second is being sent. The second buffer therefore starts
+// a multiple of 4 bytes after the first, with room for its own lead word.
+#define BBEP_ROW_B_OFF(p) ((((p)->native_width / 4) + 2 * BBEP_LEAD_BYTES + 3) & ~3)
+#define BBEP_ROW_BUF_EXTRA 16
 #else
 #define BBEP_LEAD_BYTES 0
+#define BBEP_ROW_B_OFF(p) ((p)->native_width / 4)
+#define BBEP_ROW_BUF_EXTRA 0
 #endif
 // Second, independent experiment for the same strip: when FASTEPD_X_SPH_FROM_DC
 // is defined, the source driver start pulse (SPH) is driven by the LCD
@@ -1935,17 +1943,15 @@ int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int
 
     // Allocate memory for each line to transmit
 #ifndef __LINUX__
-    pState->dma_buf = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width / 2) + pState->panelDef.iLinePadding + 16 + 2 * BBEP_LEAD_BYTES, MALLOC_CAP_DMA);
-#if BBEP_LEAD_BYTES
-    // Both alternating row buffers (offset 0 and width/4) keep a 4-byte aligned
-    // transmit address; the pixel data of each starts one bus word later.
-    if (pState->dma_buf) pState->dma_buf += BBEP_LEAD_BYTES;
-#endif
+    pState->dma_buf = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width / 2) + pState->panelDef.iLinePadding + 16 + BBEP_ROW_BUF_EXTRA, MALLOC_CAP_DMA);
 #else
     pState->dma_buf = (uint8_t *)malloc((pState->width/2) + pState->panelDef.iLinePadding + 16);
 #endif
     if (!pState->dma_buf) return BBEP_ERROR_NO_MEMORY;
-    memset(pState->dma_buf, 0, (pState->width / 2) + pState->panelDef.iLinePadding + 16); // the padding sent after each row must be no-drive
+    memset(pState->dma_buf, 0, (pState->width / 2) + pState->panelDef.iLinePadding + 16 + BBEP_ROW_BUF_EXTRA); // the padding sent after each row must be no-drive
+    // Both alternating row buffers (offset 0 and BBEP_ROW_B_OFF) keep a 4-byte
+    // aligned transmit address; the pixel data of each starts one bus word later.
+    pState->dma_buf += BBEP_LEAD_BYTES;
     iPasses = (pState->panelDef.iMatrixSize / 16); // number of passes
     pGrayLower = (uint8_t *)malloc(256 * iPasses);
     if (!pGrayLower) return BBEP_ERROR_NO_MEMORY;
@@ -2785,7 +2791,7 @@ uint8_t *d;
                 memcpy(d, u8Cache, pState->native_width / 4);
             }
             bbepWriteRow(pState, d, pState->native_width / 4, (i!=0));
-            iDMAOff ^= (pState->native_width/4);
+            iDMAOff ^= BBEP_ROW_B_OFF(pState);
         }
         delayMicroseconds(230);
     }
@@ -2845,7 +2851,7 @@ int bbepSmoothUpdate(FASTEPDSTATE *pState, bool bKeepOn, uint8_t u8Color)
                 memcpy(d, s, pState->native_width/4);
                 bbepWriteRow(pState, d, (pState->native_width / 4), 0);
                 bbepRowControl(pState, ROW_STEP);
-                iDMAOff ^= (pState->native_width/4);
+                iDMAOff ^= BBEP_ROW_B_OFF(pState);
             }
             delayMicroseconds(230);
         } // for pass
@@ -2884,7 +2890,7 @@ int bbepSmoothUpdate(FASTEPDSTATE *pState, bool bKeepOn, uint8_t u8Color)
                 }
                 bbepWriteRow(pState, d, (pState->native_width / 4), 0);
                 bbepRowControl(pState, ROW_STEP);
-                iDMAOff ^= (pState->native_width/4);
+                iDMAOff ^= BBEP_ROW_B_OFF(pState);
             } // for i
             delayMicroseconds(230);
         } // for pass
@@ -2945,7 +2951,7 @@ int bbepFastUpdate(FASTEPDSTATE *pState, bool bKeepOn)
                 *d32++ = ~(*s32++); // inverted
             }
             bbepWriteRow(pState, d, (pState->native_width / 4), (i!=0));
-            iDMAOff ^= (pState->native_width/4);
+            iDMAOff ^= BBEP_ROW_B_OFF(pState);
         }
         delayMicroseconds(230);
     } // for inverted passes
@@ -2960,7 +2966,7 @@ int bbepFastUpdate(FASTEPDSTATE *pState, bool bKeepOn)
             // Send the data for the row
             memcpy(d, s, iPitch);
             bbepWriteRow(pState, d, (pState->native_width / 4), (i!=0));
-            iDMAOff ^= (pState->native_width/4);
+            iDMAOff ^= BBEP_ROW_B_OFF(pState);
         }
         delayMicroseconds(230);
     } // for non-inverted passes
@@ -3135,7 +3141,7 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                 }
                 // Send the data for the row
                 bbepWriteRow(pState, &pState->dma_buf[iDMAOff], (pState->native_width / 4), (i!=0));
-                iDMAOff ^= (pState->native_width/4);
+                iDMAOff ^= BBEP_ROW_B_OFF(pState);
             } // for i
             delayMicroseconds(230);
         } // for pass
@@ -3170,7 +3176,7 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                 }
                 // Send the data for the row
                 bbepWriteRow(pState, &pState->dma_buf[iDMAOff], (pState->native_width / 4), (i!=0));
-                iDMAOff ^= (pState->native_width/4);
+                iDMAOff ^= BBEP_ROW_B_OFF(pState);
             } // for i
             delayMicroseconds(230);
         } // for pass
@@ -3233,7 +3239,7 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                 // Send the data for the row
                 memcpy(d, s, pState->native_width/4);
                 bbepWriteRow(pState, d, (pState->native_width / 4), (i!=0));
-                iDMAOff ^= (pState->native_width/4);
+                iDMAOff ^= BBEP_ROW_B_OFF(pState);
             }
             delayMicroseconds(230);
         } // for pass
@@ -3282,7 +3288,7 @@ int bbepFullUpdate(FASTEPDSTATE *pState, int iClearMode, bool bKeepOn, BB_RECT *
                     memset(d, 0, pState->native_width/4);
                 }
                 bbepWriteRow(pState, d, (pState->native_width / 4), (i!=0));
-                iDMAOff ^= (pState->native_width / 4); // toggle offset
+                iDMAOff ^= BBEP_ROW_B_OFF(pState); // toggle offset
                 //bbepRowControl(pState, ROW_STEP);
             } // for i
             delayMicroseconds(230);
@@ -3568,7 +3574,7 @@ int bbep2BppPartial(FASTEPDSTATE *pState, bool bKeepOn, int iStartLine, int iEnd
             memcpy(d, s, pState->native_width/4);
             // Send the data for the row
             bbepWriteRow(pState, &pState->dma_buf[iDMAOff], (pState->native_width / 4), (i!=0));
-            iDMAOff ^= (pState->native_width/4);
+            iDMAOff ^= BBEP_ROW_B_OFF(pState);
         } // for i
         delayMicroseconds(230);
     } // for pass
@@ -3616,7 +3622,7 @@ int bbep2BppPartial(FASTEPDSTATE *pState, bool bKeepOn, int iStartLine, int iEnd
             memcpy(d, s, pState->native_width/4);
             // Send the data for the row
             bbepWriteRow(pState, &pState->dma_buf[iDMAOff], (pState->native_width / 4), (i!=0));
-            iDMAOff ^= (pState->native_width/4);
+            iDMAOff ^= BBEP_ROW_B_OFF(pState);
         } // for i
         delayMicroseconds(230);
     } // for pass
@@ -3739,7 +3745,7 @@ static int IRAM_ATTR bbepPartialUpdate(FASTEPDSTATE *pState, bool bKeepOn, int i
                 iSkipped++;
             }
             dp += iDelta;
-            iDMAOff ^= (pState->native_width/4);
+            iDMAOff ^= BBEP_ROW_B_OFF(pState);
         }
     } // for each pass
 
