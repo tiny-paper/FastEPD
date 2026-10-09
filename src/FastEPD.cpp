@@ -365,6 +365,11 @@ void FASTEPD::setPasses(uint8_t iPartialPasses, uint8_t iFullPasses)
     }
 } /* setPasses() */
 
+void FASTEPD::setVCOM(int iVCOM)
+{
+    bbepSetVCOM(&_state, iVCOM);
+} /* setVCOM() */
+
 int FASTEPD::setRotation(int iAngle)
 {
     return bbepSetRotation(&_state, iAngle);

@@ -378,6 +378,8 @@ class FASTEPD
     int smoothUpdate(bool bKeepOn, uint8_t u8Color);
     int fastUpdate(bool bKeepOn = false);
     void setPasses(uint8_t iPartialPasses, uint8_t iFullPasses = 5);
+    void setVCOM(int iVCOM);
+    int getVCOM(void) { return _state.iVCOM;}
     int setRotation(int iAngle);
     int getRotation(void) { return _state.rotation;}
     void backupPlane(void);

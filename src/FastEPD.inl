@@ -224,6 +224,7 @@ int bbSetPixel2Clr(void *pb, int x, int y, unsigned char ucColor);
 void bbSetPixelFast2Clr(void *pb, int x, int y, unsigned char ucColor);
 int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int iVCOM);
 int bbepSetCustomMatrix(FASTEPDSTATE *pState, const uint8_t *pMatrix, size_t matrix_size);
+void bbepSetVCOM(FASTEPDSTATE *pState, int iVCOM);
 void it8951WriteCmdCode(FASTEPDSTATE *pState, uint16_t cmd);
 //
 // Pre-defined panels for popular products and boards
@@ -3765,6 +3766,17 @@ static int IRAM_ATTR bbepPartialUpdate(FASTEPDSTATE *pState, bool bKeepOn, int i
 #endif // SHOW_TIME
     return BBEP_SUCCESS;
 } /* bbepPartialUpdate() */
+//
+// Set the VCOM in millivolts (e.g. -1600 = -1.6V) after the panel
+// is initialized. It is sent to the PMIC at the next power up.
+// Values outside of the PMIC's range (-5110 to 0) are ignored
+//
+void bbepSetVCOM(FASTEPDSTATE *pState, int iVCOM)
+{
+    if (iVCOM <= 0 && iVCOM >= -5110) { // 9-bit register, 10mV steps
+        pState->iVCOM = iVCOM;
+    }
+} /* bbepSetVCOM() */
 //
 // Copy the current pixels to the previous
 // This facilitates doing partial updates after the power is lost
